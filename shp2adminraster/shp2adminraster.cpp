@@ -642,18 +642,20 @@ int main(int argc, char *argv[])
     writeTilesToDatabase(listAllTileFiles,pStmt);
 
     // remove image files
-    // system("rm -rf admin1");
+     system("rm -rf admin1");
 
     // get records from admin0 and admin1 dbf
     qDebug() << "INFO: Writing admin regions to database...";
     writeAdminRegionsToDatabase(a0_fileDbf,a1_fileDbf,pStmt);
 
-
     // clean up database
     delete pStmt;
     delete pDatabase;
 
-    // verify images written successfully [27]
+    return 0;
+}
+
+// verify images written successfully
 //    qDebug() << "INFO: Test";
 //    Kompex::SQLiteBlob * pBlob =
 //            new Kompex::SQLiteBlob(pDatabase,"main","tiles","png",0);
@@ -666,17 +668,3 @@ int main(int argc, char *argv[])
 //        qDebug() << "ERROR: failed to save";
 //        return -1;
 //    }
-
-    //
-    return 0;
-}
-
-
-
-
-
-
-
-
-
-
