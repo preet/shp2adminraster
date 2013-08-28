@@ -25,6 +25,7 @@
 #include <QDir>
 #include <QFile>
 #include <QBuffer>
+#include <QTextCodec>
 
 // shapelib
 #include "shapefil.h"
@@ -48,6 +49,35 @@ struct Vec2d
     double y;
     QColor c;
 };
+
+bool getAdmin1TranslationSubs(QString const &pathFile,
+                              QList<QString> &listAdmin1Subs)
+{
+    QFile inputFile(pathFile);
+    if(inputFile.open(QIODevice::ReadOnly))   {
+        QString before = "\"";
+        QString after = "";
+        QTextStream in(&inputFile);
+        while(!in.atEnd())   {
+            QString line = in.readLine();
+
+            // sometimes quotes are added in to
+            // the translation substitutes file
+            // so they should be removed
+            line.replace(before,after);
+
+            listAdmin1Subs.push_back(line);
+        }
+
+        listAdmin1Subs.removeFirst();   // should be 'BEGIN'
+        listAdmin1Subs.removeLast();    // should be 'END'
+
+        return true;
+    }
+    else   {
+        return false;
+    }
+}
 
 bool getPolysFromShapefile(QString const &fileShp,
                            QList<QList<Vec2d> > &listPolygons)
@@ -273,6 +303,9 @@ bool writeAdminRegionsToDatabase(QString const &a0_dbf,
                                  QString const &a1_dbf,
                                  Kompex::SQLiteStatement * pStmt)
 {
+    // because shapefiles are evil
+    QTextCodec * codec = QTextCodec::codecForName("windows-1252");
+
     // populate the admin0 temp table
     {
         DBFHandle a0_hDBF = DBFOpen(a0_dbf.toLocal8Bit().data(),"rb");
@@ -308,12 +341,12 @@ bool writeAdminRegionsToDatabase(QString const &a0_dbf,
         pStmt->BeginTransaction();
         for(size_t i=0; i < a0_numRecords; i++)   {
             QString s0 = QString::number(i,10);
-            QString s1(DBFReadStringAttribute(a0_hDBF, i, a0_idx_adm_a3));
-            QString s2(DBFReadStringAttribute(a0_hDBF, i, a0_idx_sov_a3));
-            QString s3(DBFReadStringAttribute(a0_hDBF, i, a0_idx_adm_name));
-            QString s4(DBFReadStringAttribute(a0_hDBF, i, a0_idx_sov_name));
-            QString s5(DBFReadStringAttribute(a0_hDBF, i, a0_idx_type));
-            QString s6(DBFReadStringAttribute(a0_hDBF, i, a0_idx_note));
+            QString s1(codec->toUnicode(DBFReadStringAttribute(a0_hDBF, i, a0_idx_adm_a3)));
+            QString s2(codec->toUnicode(DBFReadStringAttribute(a0_hDBF, i, a0_idx_sov_a3)));
+            QString s3(codec->toUnicode(DBFReadStringAttribute(a0_hDBF, i, a0_idx_adm_name)));
+            QString s4(codec->toUnicode(DBFReadStringAttribute(a0_hDBF, i, a0_idx_sov_name)));
+            QString s5(codec->toUnicode(DBFReadStringAttribute(a0_hDBF, i, a0_idx_type)));
+            QString s6(codec->toUnicode(DBFReadStringAttribute(a0_hDBF, i, a0_idx_note)));
 
             QString stmt("INSERT INTO temp("
                          "id,"
@@ -342,13 +375,30 @@ bool writeAdminRegionsToDatabase(QString const &a0_dbf,
         DBFHandle a1_hDBF = DBFOpen(a1_dbf.toLocal8Bit().data(),"rb");
         if(a1_hDBF == NULL)   {
             qDebug() << "ERROR: Could not open admin1 dbf file";
-            return -1;
+            return false;
         }
 
         size_t a1_numRecords = DBFGetRecordCount(a1_hDBF);
         if(a1_numRecords == 0)   {
             qDebug() << "ERROR: admin1 dbf file has no records!";
-            return -1;
+            return false;
+        }
+
+        // open admin1 translation csv if it exists
+        QStringList listAdmin1Subs;
+        QString pathSubs = a1_dbf;
+        pathSubs.chop(4);
+        pathSubs.append("_translations.dat");
+        bool admin1_csv_sub = getAdmin1TranslationSubs(pathSubs,listAdmin1Subs);
+        if(admin1_csv_sub)   {
+            if(listAdmin1Subs.size() == a1_numRecords)   {
+                qDebug() << "INFO: Using translation substitute file: "<< pathSubs;
+            }
+            else   {
+                qDebug() << "WARN: Translation file has wrong number "
+                            "of entries: " << listAdmin1Subs.size();
+                admin1_csv_sub = false;
+            }
         }
 
         size_t a1_idx_adm_name  = DBFGetFieldIndex(a1_hDBF,"name");
@@ -364,23 +414,30 @@ bool writeAdminRegionsToDatabase(QString const &a0_dbf,
         for(size_t i=0; i < a1_numRecords; i++)   {
             // get the name of this admin1 entry
             QString admin1_idx = QString::number(i,10);
-            QString admin1_name(DBFReadStringAttribute(a1_hDBF, i, a1_idx_adm_name));
+            QString admin1_name(codec->toUnicode(DBFReadStringAttribute(a1_hDBF, i, a1_idx_adm_name)));
 
             // if the adm1 fclass is an aggregation, minor island or
             // remainder, we grab the name from another field which
             // doesn't contain a bunch of additional metadata
-            QString fclass(DBFReadStringAttribute(a1_hDBF, i, a1_idx_fclass));
+            QString fclass(codec->toUnicode(DBFReadStringAttribute(a1_hDBF, i, a1_idx_fclass)));
             if(fclass.contains("aggregation") ||
                fclass.contains("minor island") ||
                fclass.contains("remainder"))
             {
-                admin1_name = QString(DBFReadStringAttribute(
-                                   a1_hDBF, i, a1_idx_adminname));
+                admin1_name = QString(codec->toUnicode(DBFReadStringAttribute(
+                                   a1_hDBF, i, a1_idx_adminname)));
+            }
+            else   {
+                // if there's no special feature class than we check
+                // to see if there's a translation substitute available
+                if(admin1_csv_sub && (listAdmin1Subs[i].size() > 0))   {
+                    admin1_name = listAdmin1Subs[i];
+                }
             }
 
             // get the adm_a3,sov_a3 code for this admin1 entry
-            QString adm_a3(DBFReadStringAttribute(a1_hDBF, i, a1_idx_adm_a3));
-            QString sov_a3(DBFReadStringAttribute(a1_hDBF, i, a1_idx_sov_a3));
+            QString adm_a3(codec->toUnicode(DBFReadStringAttribute(a1_hDBF, i, a1_idx_adm_a3)));
+            QString sov_a3(codec->toUnicode(DBFReadStringAttribute(a1_hDBF, i, a1_idx_sov_a3)));
 
             // check if the adm_a3 code exists in the temp database
             QString stmt("SELECT * FROM temp WHERE adm_a3=\""+ adm_a3 + "\";");
@@ -472,19 +529,19 @@ bool writeAdminRegionsToDatabase(QString const &a0_dbf,
         // write prepared statements
         pStmt->BeginTransaction();
         for(int i=0; i < listSqlSaveSov.size(); i++)   {
-            pStmt->SqlStatement(listSqlSaveSov[i].toStdString());
+            pStmt->SqlStatement(listSqlSaveSov[i].toUtf8().data());
         }
         pStmt->CommitTransaction();
 
         pStmt->BeginTransaction();
         for(int i=0; i < listSqlSaveAdmin0.size(); i++)   {
-             pStmt->SqlStatement(listSqlSaveAdmin0[i].toStdString());
+             pStmt->SqlStatement(listSqlSaveAdmin0[i].toUtf8().data());
         }
         pStmt->CommitTransaction();
 
         pStmt->BeginTransaction();
         for(int i=0; i < listSqlSaveAdmin1.size(); i++)   {
-            pStmt->SqlStatement(listSqlSaveAdmin1[i].toStdString());
+            pStmt->SqlStatement(listSqlSaveAdmin1[i].toUtf8().data());
         }
         pStmt->CommitTransaction();
     }
